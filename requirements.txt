@@ -6,3 +6,4 @@ streamlit-aggrid
 joblib
 scikit-learn
 openpyxl
+streamlit-option-menu
