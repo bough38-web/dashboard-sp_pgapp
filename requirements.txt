@@ -3,3 +3,5 @@ pandas
 plotly
 openpyxl
 streamlit-option-menu
+folium
+streamlit-folium
