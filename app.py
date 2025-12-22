@@ -5,9 +5,9 @@ import plotly.graph_objects as go
 import os
 from streamlit_option_menu import option_menu
 
-# === 1. 페이지 및 스타일 설정 (참고 이미지 스타일 적용) ===
+# === 1. 페이지 및 스타일 설정 ===
 st.set_page_config(
-    page_title="KTT 지사별 성과 대시보드",
+    page_title="KTT 영업구역별 성과 분석",
     page_icon="📊",
     layout="wide"
 )
@@ -15,13 +15,13 @@ st.set_page_config(
 # KTT Dashboard 스타일 (회색 배경 + 흰색 카드 + 둥근 모서리)
 st.markdown("""
     <style>
-        /* 전체 배경색 (연한 회색) */
+        /* 전체 배경색 */
         .stApp { background-color: #f8f9fa; }
         
-        /* 메인 컨테이너 패딩 조정 */
+        /* 메인 컨테이너 패딩 */
         .block-container { padding-top: 2rem; padding-bottom: 3rem; }
         
-        /* 카드(White Box) 스타일 정의 */
+        /* 카드(White Box) 스타일 */
         .dashboard-card {
             background-color: white;
             padding: 20px;
@@ -30,15 +30,13 @@ st.markdown("""
             margin-bottom: 20px;
         }
         
-        /* KPI 텍스트 스타일 */
+        /* 텍스트 스타일 */
         .kpi-title { font-size: 14px; color: #888; font-weight: 600; margin-bottom: 5px; }
         .kpi-value { font-size: 26px; font-weight: 800; color: #333; }
         .kpi-sub { font-size: 12px; color: #28a745; font-weight: 500; }
         
-        /* 사이드바 스타일 커스텀 */
+        /* 사이드바 스타일 */
         section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #eee; }
-        
-        /* 버튼형 필터(Pills) 스타일 미세 조정 */
         div[data-testid="stPills"] { gap: 8px; }
     </style>
 """, unsafe_allow_html=True)
@@ -82,22 +80,23 @@ if raw_df is None:
     st.error("데이터 파일을 찾을 수 없습니다.")
     st.stop()
 
-# === [핵심] 사용자 지정 정렬 순서 적용 ===
+# === [정렬] 사용자 지정 순서 (중앙 ~ 원주) ===
 custom_order = ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주']
-# 데이터프레임의 '구분' 컬럼을 이 순서로 강제 정렬 (Sorting)
 region_col = '구분' if '구분' in raw_df.columns else raw_df.columns[0]
+code_col = '구역' if '구역' in raw_df.columns else raw_df.columns[1]
+
+# 데이터프레임 정렬 적용
 raw_df[region_col] = pd.Categorical(raw_df[region_col], categories=custom_order, ordered=True)
 raw_df = raw_df.sort_values(region_col)
 
 
-# === 3. 사이드바 (KTT 대시보드 스타일) ===
+# === 3. 사이드바 (필터링) ===
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2920/2920323.png", width=50)
     st.markdown("### **KTT Dashboard**")
     st.markdown("---")
     
-    # 1. 메뉴 네비게이션
-    st.caption("SYSTEM")
+    # 메뉴
     menu = option_menu(
         None, ["통합 대시보드", "상세 리스트", "설정"],
         icons=['grid-1x2-fill', 'list-task', 'gear'],
@@ -108,64 +107,55 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 2. 버튼형 필터 (보내주신 이미지 스타일)
+    # 지사 필터 (Pills)
     st.caption("지사 필터 (BRANCH)")
+    all_regions = sorted(raw_df[region_col].unique().dropna())
     
-    # 지사 목록 가져오기 (정렬된 순서대로)
-    all_regions = sorted(raw_df[region_col].unique().dropna()) # 이미 위에서 정렬됨
-    
-    # [핵심 기능] st.pills 사용 (버튼형 다중 선택)
-    # Streamlit 1.40.0 이상 필요
     selected_regions = st.pills(
         "지사를 선택하세요",
         options=all_regions,
         selection_mode="multi",
-        default=all_regions, # 기본값: 전체 선택
+        default=all_regions,
         help="클릭하여 지사를 켜고 끌 수 있습니다."
     )
     
-    # 만약 다 끄면 데이터가 안 보이므로 방지
     if not selected_regions:
         st.warning("최소 1개 이상의 지사를 선택해주세요.")
-        selected_regions = all_regions # 강제 전체 선택
+        selected_regions = all_regions
 
-    # 3. 구역 필터
-    code_col = '구역' if '구역' in raw_df.columns else raw_df.columns[1]
+    # 구역 필터
     if code_col:
         st.caption("구역 필터 (ZONE)")
         filtered_codes_source = raw_df[raw_df[region_col].isin(selected_regions)]
         available_codes = sorted(filtered_codes_source[code_col].unique())
-        # 구역은 너무 많을 수 있으므로 multiselect 유지하되 스타일 맞춤
         selected_codes = st.multiselect("구역 코드", available_codes, default=available_codes, label_visibility="collapsed")
     
     st.markdown("---")
-    st.caption(f"Ver 2.1 | 사용자: 관리자")
 
 
-# === 4. 데이터 필터링 적용 ===
+# === 4. 데이터 필터링 ===
 df = raw_df[
     (raw_df[region_col].isin(selected_regions)) & 
     (raw_df[code_col].isin(selected_codes))
 ]
 
-# === 5. 메인 대시보드 영역 (White Card Layout) ===
+# === 5. 메인 대시보드 ===
 
 if menu == "통합 대시보드":
     # 상단 헤더
     c1, c2 = st.columns([3, 1])
-    with c1: st.title("관리고객(VOC) 해지 방어 현황")
-    with c2: st.markdown(f"<div style='text-align:right; color:#888; padding-top:20px;'> 기준일: 2025.12.22 </div>", unsafe_allow_html=True)
+    with c1: st.title("영업 구역별 해지 방어 현황")
+    with c2: st.markdown(f"<div style='text-align:right; color:#888; padding-top:20px;'> 총 구역 수: {len(df)}개 </div>", unsafe_allow_html=True)
     
     st.markdown("###")
 
-    # (1) KPI 카드 영역
+    # (1) KPI 카드
     col1, col2, col3, col4 = st.columns(4)
     
     total_target = df['대상'].sum()
     total_churn = df['해지'].sum()
     avg_retention = df['유지(방어)율'].mean()
     
-    # KPI 카드 HTML 함수
     def kpi_card(title, value, sub_text, color="#28a745"):
         return f"""
         <div class="dashboard-card" style="text-align:center;">
@@ -175,70 +165,84 @@ if menu == "통합 대시보드":
         </div>
         """
         
-    with col1: st.markdown(kpi_card("총 관리 대상", f"{total_target:,.0f}", "전월 대비 ▲ 12건"), unsafe_allow_html=True)
-    with col2: st.markdown(kpi_card("처리 완료(방어)", f"{total_target - total_churn:,.0f}", "진행률 100%"), unsafe_allow_html=True)
-    with col3: st.markdown(kpi_card("해지 접수", f"{total_churn:,.0f}", "방어 실패", color="#dc3545"), unsafe_allow_html=True) # 빨간색
-    with col4: st.markdown(kpi_card("평균 방어율", f"{avg_retention:.1f}%", "목표 달성", color="#007bff"), unsafe_allow_html=True) # 파란색
+    with col1: st.markdown(kpi_card("총 관리 대상", f"{total_target:,.0f}", "전체 합계"), unsafe_allow_html=True)
+    with col2: st.markdown(kpi_card("방어 성공", f"{total_target - total_churn:,.0f}", "계약 유지"), unsafe_allow_html=True)
+    with col3: st.markdown(kpi_card("해지 건수", f"{total_churn:,.0f}", "방어 실패", color="#dc3545"), unsafe_allow_html=True)
+    with col4: st.markdown(kpi_card("평균 방어율", f"{avg_retention:.1f}%", "구역 평균", color="#007bff"), unsafe_allow_html=True)
 
-    # (2) 차트 영역 (2열 배치)
+    # (2) 차트 영역
     cl1, cl2 = st.columns([1, 1])
     
+    # [차트 1] 지사별 현황 (요약)
     with cl1:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📊 지사별 처리 현황 (막대)")
+        st.subheader("📊 지사별 관리 규모 비교")
         
-        # 지사별 그룹화
         group_df = df.groupby(region_col)[['대상', '해지']].sum().reset_index()
-        # 정렬 순서 보장을 위해 다시 Categorical 적용
         group_df[region_col] = pd.Categorical(group_df[region_col], categories=custom_order, ordered=True)
         group_df = group_df.sort_values(region_col)
         
         fig_bar = px.bar(
-            group_df, x=region_col, y='대상', 
-            text='대상',
-            title=None,
-            color=region_col, # 지사별 색상 다르게
-            color_discrete_sequence=px.colors.qualitative.Pastel
+            group_df, x=region_col, y='대상', text='대상',
+            color=region_col, color_discrete_sequence=px.colors.qualitative.Pastel
         )
-        fig_bar.update_layout(paper_bgcolor='white', plot_bgcolor='white', height=350, showlegend=False)
+        fig_bar.update_layout(paper_bgcolor='white', plot_bgcolor='white', height=400, showlegend=False)
         st.plotly_chart(fig_bar, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # [차트 2] 4분면 분석 (구역 기준 수정됨)
     with cl2:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("🎯 규모 대비 방어 성과 (4분면)")
+        st.subheader("🎯 구역(Zone)별 성과 매트릭스")
         
         mean_target = raw_df['대상'].mean()
         mean_ret = raw_df['유지(방어)율'].mean()
 
+        # [수정 포인트] text와 hover_name을 '구역 코드(code_col)'로 변경
         fig_scatter = px.scatter(
-            df, x='대상', y='유지(방어)율', size='대상', color='해지',
-            hover_name=code_col, text=region_col, 
+            df, 
+            x='대상', 
+            y='유지(방어)율', 
+            size='대상', 
+            color='해지', # 색상은 해지 건수로 유지 (붉을수록 위험)
+            hover_name=code_col, # 마우스 올리면 구역명 표시
+            hover_data={region_col: True, code_col: True}, # 툴팁에 지사명도 같이 표시
+            text=code_col, # 점 옆에 구역 코드 표시 (중요)
             color_continuous_scale='Reds',
-            height=350
+            height=400
         )
-        # 기준선
-        fig_scatter.add_hline(y=mean_ret, line_dash="dash", line_color="green", annotation_text="평균 방어율")
-        fig_scatter.add_vline(x=mean_target, line_dash="dash", line_color="blue")
         
-        fig_scatter.update_layout(paper_bgcolor='white', plot_bgcolor='white', margin=dict(t=20, b=20))
-        fig_scatter.update_traces(textposition='top center')
+        # 기준선 및 배경
+        fig_scatter.add_hline(y=mean_ret, line_dash="dash", line_color="green", annotation_text="평균 방어율")
+        fig_scatter.add_vline(x=mean_target, line_dash="dash", line_color="blue", annotation_text="평균 규모")
+        
+        # 우상단(우수) 영역 표시
+        fig_scatter.add_shape(type="rect", x0=mean_target, y0=mean_ret, x1=df['대상'].max()*1.2, y1=105, 
+                              fillcolor="green", opacity=0.05, line_width=0)
+
+        fig_scatter.update_layout(
+            paper_bgcolor='white', plot_bgcolor='white', 
+            margin=dict(t=20, b=20),
+            xaxis_title="관리 대상 (규모)",
+            yaxis_title="방어율 (%)"
+        )
+        fig_scatter.update_traces(textposition='top center') # 텍스트 위치 조정
         st.plotly_chart(fig_scatter, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # (3) 하단 테이블 영역
+    # (3) 하단 테이블
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.subheader("📋 상세 리스트 (클릭 시 정렬)")
+    st.subheader("📋 구역별 상세 성과 리스트")
     
-    # 보기 좋은 컬럼 순서
     display_cols = [region_col, code_col, '대상', '해지', '해지율', '유지(방어)율']
     final_cols = [c for c in display_cols if c in df.columns]
     
     st.dataframe(
-        df[final_cols].sort_values(by=region_col), # 기본 정렬: 지사순
+        df[final_cols].sort_values(by=[region_col, '해지'], ascending=[True, False]),
         use_container_width=True,
         column_config={
             region_col: "지사",
+            code_col: "구역 코드",
             "해지율": st.column_config.ProgressColumn("해지율", format="%.1f%%", min_value=0, max_value=20),
             "유지(방어)율": st.column_config.ProgressColumn("방어율", format="%.1f%%", min_value=80, max_value=100),
         },
@@ -247,9 +251,9 @@ if menu == "통합 대시보드":
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif menu == "상세 리스트":
-    st.title("구역별 상세 데이터")
+    st.title("전체 데이터 원본")
     st.dataframe(df, use_container_width=True)
 
 elif menu == "설정":
     st.title("환경 설정")
-    st.info("데이터 소스 연결 및 관리자 설정 메뉴입니다.")
+    st.info("관리자 전용 메뉴입니다.")
