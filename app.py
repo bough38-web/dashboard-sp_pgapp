@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px  # [수정] 누락되었던 라이브러리 추가
 import folium
 from streamlit_folium import st_folium
 from streamlit_option_menu import option_menu
@@ -67,6 +68,7 @@ st.markdown("""
 # === 2. [Data] 데이터 로드 함수 ===
 @st.cache_data
 def load_existing_data():
+    """기존 대시보드용 데이터 로드 (papp.csv)"""
     file_names = ['papp.csv', 'papp.xlsx', '시각화.csv']
     df = None
     for file in file_names:
@@ -76,6 +78,7 @@ def load_existing_data():
                 else: df = pd.read_excel(file, header=0)
                 break
             except: continue
+            
     if df is not None:
         if '구분' in df.columns: df = df[df['구분'] != '소계']
         target_cols = ['대상', '해지', '해지율', '유지(방어)율']
@@ -92,6 +95,7 @@ def load_existing_data():
 
 @st.cache_data
 def load_2026_db():
+    """2026 관리고객 DB 로드 (db.csv)"""
     db_file = 'db.csv'
     if os.path.exists(db_file):
         try:
@@ -115,7 +119,7 @@ def load_2026_db():
                 if '변경요청' not in df.columns: df['변경요청'] = ''
                 df['해지여부'] = df['변경요청'].apply(lambda x: '해지예정' if str(x).strip() == '삭제' else '유지')
 
-            # 4. 주소 데이터 결합
+            # 4. 주소 데이터 결합 (군구 + 읍면동) -> 주소(지역)
             if '군구' in df.columns and '읍면동' in df.columns:
                 df['주소(지역)'] = df['군구'].fillna('') + ' ' + df['읍면동'].fillna('')
                 df['주소(지역)'] = df['주소(지역)'].str.strip()
@@ -128,7 +132,7 @@ def load_2026_db():
 
             # 6. [지사명 정리 및 정렬] "지사" 글자 제거 및 지정된 순서 정렬
             if '담당부서2' in df.columns:
-                # "지사" 글자 제거
+                # "지사" 글자 제거 (예: 강북지사 -> 강북)
                 df['담당부서2'] = df['담당부서2'].astype(str).str.replace('지사', '')
                 
                 # 사용자 지정 정렬 순서
@@ -163,7 +167,9 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # [기존 대시보드 필터]
+    # -------------------------------------------------------------------------
+    # 필터: [기존 대시보드]
+    # -------------------------------------------------------------------------
     if menu == "기존 대시보드" and df_old is not None:
         st.markdown("**필터 (Filters)**")
         custom_order = ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주']
@@ -178,6 +184,7 @@ with st.sidebar:
             all_regions = sorted(unique_regions, key=sort_key)
         except: all_regions = []
         
+        # 전체 선택 기능
         c1, c2 = st.columns(2)
         if c1.button("전체 선택"): st.session_state.old_regions = all_regions
         if c2.button("초기화"): st.session_state.old_regions = []
@@ -185,7 +192,9 @@ with st.sidebar:
         if 'old_regions' not in st.session_state: st.session_state.old_regions = all_regions
         selected_regions = st.multiselect("지사 선택", all_regions, key='ms_old_regions', default=st.session_state.old_regions)
         
-    # [2026 DB 필터]
+    # -------------------------------------------------------------------------
+    # 필터: [2026 관리고객 DB]
+    # -------------------------------------------------------------------------
     elif menu == "2026 관리고객 DB" and df_new is not None:
         # 1. 고객명 검색
         st.markdown("**🔍 고객 검색**")
@@ -201,12 +210,12 @@ with st.sidebar:
         
         st.markdown("---")
 
-        # 3. 접기/펼치기 필터 그룹
+        # 3. 접기/펼치기 필터 그룹 (Expander)
         
         # (1) 담당부서2 (지사)
         with st.expander("📂 담당부서(지사) 선택", expanded=True):
             if '담당부서2' in df_new.columns:
-                # 이미 정렬되어 있으므로 그대로 사용
+                # 이미 로드할 때 정렬했으므로 unique()만 호출해도 순서 유지
                 opts_branch = df_new['담당부서2'].unique()
                 sel_branch = st.multiselect("지사 선택", opts_branch, default=[], placeholder="지사 선택...")
             else: sel_branch = []
@@ -258,7 +267,7 @@ if menu == "2026 관리고객 DB":
     if not show_churn:
         filtered_df = filtered_df[filtered_df['해지여부'] == '유지']
     
-    # 2. 고객명 검색
+    # 2. 고객명 검색 (사이드바 입력)
     if search_name:
         filtered_df = filtered_df[filtered_df['관리고객명'].astype(str).str.contains(search_name, case=False)]
 
@@ -276,7 +285,7 @@ if menu == "2026 관리고객 DB":
     if sel_tech: filtered_df = filtered_df[filtered_df['기술구역정보'].isin(sel_tech)]
     if sel_zone: filtered_df = filtered_df[filtered_df['구역정보'].isin(sel_zone)]
 
-    # [메인 검색창]
+    # [메인 검색창] (계약번호/상호)
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.subheader("🔍 통합 검색")
     search_txt = st.text_input("계약번호 또는 상호 입력", placeholder="예: 52308742, 블루엘리펀트")
@@ -289,16 +298,17 @@ if menu == "2026 관리고객 DB":
     st.markdown('</div>', unsafe_allow_html=True)
 
     # [탭 구성]
-    tab1, tab2 = st.tabs(["📋 상세 데이터 리스트", "🗺️ 지도 시각화"])
+    tab1, tab2, tab3 = st.tabs(["📋 상세 데이터 리스트", "🗺️ 지도 시각화", "📊 구역별 통계"])
 
-    # TAB 1: 리스트 (요청사항: 지사명 수정, 구역정보 추가, 주소(지역) 사용)
+    # TAB 1: 상세 리스트
     with tab1:
         st.markdown(f"##### 조회 결과: {len(filtered_df):,}건")
         
+        # [요청사항] 표시 컬럼 순서 및 구성
         cols_to_show = [
             '관리고객명', '상호', '계약번호', '해지여부', '담당부서2', 
             '주소(지역)', '합산월정료(KTT+KT)', 
-            '영업구역정보', '기술구역정보', '구역정보', # [추가된 구역 정보]
+            '영업구역정보', '기술구역정보', '구역정보', # 구역정보 3종 추가
             '지도링크_URL'
         ]
         final_cols = [c for c in cols_to_show if c in filtered_df.columns]
@@ -308,7 +318,7 @@ if menu == "2026 관리고객 DB":
             use_container_width=True,
             height=600,
             column_config={
-                "해지여부": st.column_config.TextColumn("상태"),
+                "해지여부": st.column_config.TextColumn("상태", width="small"),
                 "담당부서2": st.column_config.TextColumn("지사", width="small"),
                 "주소(지역)": st.column_config.TextColumn("지역 (군/구+읍/면/동)", width="medium"),
                 "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료", width="small"),
@@ -316,13 +326,13 @@ if menu == "2026 관리고객 DB":
                 "기술구역정보": st.column_config.TextColumn("기술구역", width="small"),
                 "구역정보": st.column_config.TextColumn("구역", width="small"),
                 "지도링크_URL": st.column_config.LinkColumn(
-                    "길찾기", help="클릭 시 지도 이동", display_text="지도보기 🔗"
+                    "길찾기", help="클릭 시 지도로 이동", display_text="지도보기 🔗"
                 )
             },
             hide_index=True
         )
 
-    # TAB 2: 지도 (요청사항: 상호(지사) 표시 및 구역정보 포함)
+    # TAB 2: 지도 시각화
     with tab2:
         st.markdown("##### 📍 고객 위치 분포")
         map_df = filtered_df[(filtered_df['위도'] > 0) & (filtered_df['경도'] > 0)]
@@ -340,19 +350,20 @@ if menu == "2026 관리고객 DB":
                 color = 'red' if is_churn else 'blue'
                 status_html = f"<span style='color:red; font-weight:bold'>[해지예정]</span><br>" if is_churn else ""
                 
-                # [수정] 팝업 내용에 구역 정보 3가지 추가
+                # [수정] 팝업 내용 강화: 상호(지사), 구역정보 3종 포함
                 popup_html = f"""
-                <div style="font-family:sans-serif; width:250px;">
+                <div style="font-family:sans-serif; width:260px;">
                     <h5 style="margin:0; color:#4f46e5;">{row['상호']} ({row['담당부서2']})</h5>
                     {status_html}
                     <hr style="margin:5px 0;">
-                    <div style="font-size:12px; color:#555;">
+                    <div style="font-size:12px; color:#555; line-height:1.4;">
                         <b>주소:</b> {row['주소(지역)']}<br>
                         <b>월정료:</b> {row['합산월정료(KTT+KT)']}<br>
-                        <hr style="margin:5px 0; border:0; border-top:1px dashed #ddd;">
-                        <b>영업구역:</b> {row.get('영업구역정보', '-')}<br>
-                        <b>기술구역:</b> {row.get('기술구역정보', '-')}<br>
-                        <b>구역정보:</b> {row.get('구역정보', '-')}
+                        <div style="background:#f3f4f6; padding:5px; margin:5px 0; border-radius:4px;">
+                            <b>영업:</b> {row.get('영업구역정보', '-')}<br>
+                            <b>기술:</b> {row.get('기술구역정보', '-')}<br>
+                            <b>구역:</b> {row.get('구역정보', '-')}
+                        </div>
                     </div>
                     <div style="margin-top:8px;">
                         <a href="{row['지도링크_URL']}" target="_blank" 
@@ -365,7 +376,6 @@ if menu == "2026 관리고객 DB":
                 
                 folium.Marker(
                     location=[row['위도'], row['경도']],
-                    # [수정] 툴팁에도 상호(지사) 표시
                     tooltip=f"{row['상호']} ({row['담당부서2']})",
                     popup=folium.Popup(popup_html, max_width=300),
                     icon=folium.Icon(color=color, icon='info-sign')
@@ -375,8 +385,22 @@ if menu == "2026 관리고객 DB":
         else:
             st.warning("위치 정보가 있는 데이터가 없습니다.")
 
+    # TAB 3: 통계
+    with tab3:
+        st.markdown("##### 📊 구역별 데이터 분석")
+        c1, c2 = st.columns(2)
+        with c1:
+            if '영업구역정보' in filtered_df.columns:
+                fig = px.bar(filtered_df['영업구역정보'].value_counts().reset_index(), x='영업구역정보', y='count', title="영업구역별 고객 수")
+                st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            if '해지여부' in filtered_df.columns:
+                fig = px.pie(filtered_df['해지여부'].value_counts().reset_index(), values='count', names='해지여부', title="해지 vs 유지 비율",
+                             color_discrete_map={'유지':'#4f46e5', '해지예정':'#ef4444'})
+                st.plotly_chart(fig, use_container_width=True)
+
 # ---------------------------------------------------------
-# CASE 2: 기존 대시보드 (유지)
+# CASE 2: 기존 대시보드
 # ---------------------------------------------------------
 elif menu == "기존 대시보드":
     if df_old is None:
@@ -408,6 +432,7 @@ elif menu == "기존 대시보드":
     with c2:
         st.subheader("해지 위험 분석 (4분면)")
         fig = px.scatter(df, x='대상', y='유지(방어)율', size='대상', color='해지', hover_name=code_col)
+        # [수정] 오류가 발생했던 px 사용 부분 정상화
         mean_ret = df['유지(방어)율'].mean()
         mean_tgt = df['대상'].mean()
         fig.add_hline(y=mean_ret, line_dash="dot", line_color="green")
