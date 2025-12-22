@@ -1,9 +1,5 @@
 streamlit>=1.40.0
 pandas
 plotly
-sqlalchemy
-streamlit-aggrid
-joblib
-scikit-learn
 openpyxl
 streamlit-option-menu
