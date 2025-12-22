@@ -1,24 +1,20 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import os
 from streamlit_option_menu import option_menu
 
 # === 1. 페이지 및 스타일 설정 ===
 st.set_page_config(
-    page_title="KTT 영업구역별 성과 분석",
+    page_title="KTT 영업구역 성과 분석",
     page_icon="📊",
     layout="wide"
 )
 
-# KTT Dashboard 스타일 (회색 배경 + 흰색 카드 + 둥근 모서리)
+# KTT Dashboard 스타일 (회색 배경 + 흰색 카드 + 둥근 모서리 + 버튼 스타일)
 st.markdown("""
     <style>
-        /* 전체 배경색 */
         .stApp { background-color: #f8f9fa; }
-        
-        /* 메인 컨테이너 패딩 */
         .block-container { padding-top: 2rem; padding-bottom: 3rem; }
         
         /* 카드(White Box) 스타일 */
@@ -37,6 +33,8 @@ st.markdown("""
         
         /* 사이드바 스타일 */
         section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #eee; }
+        
+        /* 버튼(Pills) 간격 조정 */
         div[data-testid="stPills"] { gap: 8px; }
     </style>
 """, unsafe_allow_html=True)
@@ -56,10 +54,8 @@ def load_data():
             
     if df is None: return None
 
-    # 전처리
     if '구분' in df.columns: df = df[df['구분'] != '소계']
 
-    # 숫자 변환
     cols = ['해지율', '유지(방어)율']
     for col in cols:
         if col in df.columns:
@@ -85,7 +81,6 @@ custom_order = ['중앙', '강북', '서대문', '고양', '의정부', '남양�
 region_col = '구분' if '구분' in raw_df.columns else raw_df.columns[0]
 code_col = '구역' if '구역' in raw_df.columns else raw_df.columns[1]
 
-# 데이터프레임 정렬 적용
 raw_df[region_col] = pd.Categorical(raw_df[region_col], categories=custom_order, ordered=True)
 raw_df = raw_df.sort_values(region_col)
 
@@ -96,7 +91,6 @@ with st.sidebar:
     st.markdown("### **KTT Dashboard**")
     st.markdown("---")
     
-    # 메뉴
     menu = option_menu(
         None, ["통합 대시보드", "상세 리스트", "설정"],
         icons=['grid-1x2-fill', 'list-task', 'gear'],
@@ -107,7 +101,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 지사 필터 (Pills)
+    # 지사 필터
     st.caption("지사 필터 (BRANCH)")
     all_regions = sorted(raw_df[region_col].unique().dropna())
     
@@ -116,7 +110,7 @@ with st.sidebar:
         options=all_regions,
         selection_mode="multi",
         default=all_regions,
-        help="클릭하여 지사를 켜고 끌 수 있습니다."
+        key="region_filter"
     )
     
     if not selected_regions:
@@ -142,16 +136,15 @@ df = raw_df[
 # === 5. 메인 대시보드 ===
 
 if menu == "통합 대시보드":
-    # 상단 헤더
+    # 헤더
     c1, c2 = st.columns([3, 1])
-    with c1: st.title("영업 구역별 해지 방어 현황")
+    with c1: st.title("지사 및 구역별 성과 분석")
     with c2: st.markdown(f"<div style='text-align:right; color:#888; padding-top:20px;'> 총 구역 수: {len(df)}개 </div>", unsafe_allow_html=True)
     
     st.markdown("###")
 
     # (1) KPI 카드
     col1, col2, col3, col4 = st.columns(4)
-    
     total_target = df['대상'].sum()
     total_churn = df['해지'].sum()
     avg_retention = df['유지(방어)율'].mean()
@@ -164,7 +157,6 @@ if menu == "통합 대시보드":
             <div class="kpi-sub" style="color:{color};">{sub_text}</div>
         </div>
         """
-        
     with col1: st.markdown(kpi_card("총 관리 대상", f"{total_target:,.0f}", "전체 합계"), unsafe_allow_html=True)
     with col2: st.markdown(kpi_card("방어 성공", f"{total_target - total_churn:,.0f}", "계약 유지"), unsafe_allow_html=True)
     with col3: st.markdown(kpi_card("해지 건수", f"{total_churn:,.0f}", "방어 실패", color="#dc3545"), unsafe_allow_html=True)
@@ -173,24 +165,59 @@ if menu == "통합 대시보드":
     # (2) 차트 영역
     cl1, cl2 = st.columns([1, 1])
     
-    # [차트 1] 지사별 현황 (요약)
+    # [차트 1: 지사별 비교] 동적 버튼 기능 추가
     with cl1:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.subheader("📊 지사별 관리 규모 비교")
+        st.subheader("📊 지사별 성과 비교")
         
-        group_df = df.groupby(region_col)[['대상', '해지']].sum().reset_index()
+        # 1. 지표 선택 버튼 (Pills)
+        metric_map = {
+            "관리 대상": "대상",
+            "해지 건수": "해지",
+            "해지율(%)": "해지율",
+            "방어율(%)": "유지(방어)율"
+        }
+        selected_metric_label = st.pills(
+            "비교할 지표를 선택하세요",
+            options=list(metric_map.keys()),
+            default="방어율(%)",
+            selection_mode="single",
+            key="chart_metric_select"
+        )
+        selected_metric = metric_map[selected_metric_label]
+
+        # 2. 데이터 집계
+        if selected_metric in ['해지율', '유지(방어)율']:
+            # 비율 지표는 '평균'으로 집계
+            group_df = df.groupby(region_col)[selected_metric].mean().reset_index()
+            text_format = '.1f'
+        else:
+            # 절대값 지표는 '합계'로 집계
+            group_df = df.groupby(region_col)[selected_metric].sum().reset_index()
+            text_format = ',.0f'
+            
+        # 정렬 적용
         group_df[region_col] = pd.Categorical(group_df[region_col], categories=custom_order, ordered=True)
         group_df = group_df.sort_values(region_col)
         
+        # 3. 차트 그리기
         fig_bar = px.bar(
-            group_df, x=region_col, y='대상', text='대상',
-            color=region_col, color_discrete_sequence=px.colors.qualitative.Pastel
+            group_df, x=region_col, y=selected_metric, 
+            text=selected_metric,
+            color=region_col, 
+            color_discrete_sequence=px.colors.qualitative.Pastel
         )
-        fig_bar.update_layout(paper_bgcolor='white', plot_bgcolor='white', height=400, showlegend=False)
+        fig_bar.update_traces(texttemplate='%{text:' + text_format + '}', textposition='outside')
+        fig_bar.update_layout(
+            paper_bgcolor='white', plot_bgcolor='white', 
+            height=400, showlegend=False,
+            margin=dict(t=30, b=10),
+            yaxis_title=None, xaxis_title=None
+        )
         st.plotly_chart(fig_bar, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # [차트 2] 4분면 분석 (구역 기준 수정됨)
+    # [차트 2: 4분면 분석]
     with cl2:
         st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
         st.subheader("🎯 구역(Zone)별 성과 매트릭스")
@@ -198,35 +225,21 @@ if menu == "통합 대시보드":
         mean_target = raw_df['대상'].mean()
         mean_ret = raw_df['유지(방어)율'].mean()
 
-        # [수정 포인트] text와 hover_name을 '구역 코드(code_col)'로 변경
         fig_scatter = px.scatter(
-            df, 
-            x='대상', 
-            y='유지(방어)율', 
-            size='대상', 
-            color='해지', # 색상은 해지 건수로 유지 (붉을수록 위험)
-            hover_name=code_col, # 마우스 올리면 구역명 표시
-            hover_data={region_col: True, code_col: True}, # 툴팁에 지사명도 같이 표시
-            text=code_col, # 점 옆에 구역 코드 표시 (중요)
-            color_continuous_scale='Reds',
-            height=400
+            df, x='대상', y='유지(방어)율', size='대상', color='해지',
+            hover_name=code_col, hover_data={region_col: True, code_col: True},
+            text=code_col, color_continuous_scale='Reds', height=460
         )
-        
-        # 기준선 및 배경
         fig_scatter.add_hline(y=mean_ret, line_dash="dash", line_color="green", annotation_text="평균 방어율")
         fig_scatter.add_vline(x=mean_target, line_dash="dash", line_color="blue", annotation_text="평균 규모")
-        
-        # 우상단(우수) 영역 표시
         fig_scatter.add_shape(type="rect", x0=mean_target, y0=mean_ret, x1=df['대상'].max()*1.2, y1=105, 
                               fillcolor="green", opacity=0.05, line_width=0)
 
         fig_scatter.update_layout(
-            paper_bgcolor='white', plot_bgcolor='white', 
-            margin=dict(t=20, b=20),
-            xaxis_title="관리 대상 (규모)",
-            yaxis_title="방어율 (%)"
+            paper_bgcolor='white', plot_bgcolor='white', margin=dict(t=30, b=20),
+            xaxis_title="관리 대상 (규모)", yaxis_title="방어율 (%)"
         )
-        fig_scatter.update_traces(textposition='top center') # 텍스트 위치 조정
+        fig_scatter.update_traces(textposition='top center')
         st.plotly_chart(fig_scatter, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
