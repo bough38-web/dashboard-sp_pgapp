@@ -171,9 +171,7 @@ with st.sidebar:
         # 1. 텍스트 검색
         search_txt = st.text_input("통합 검색 (고객명/계약번호)", placeholder="예: 블루엘리펀트")
         
-        # 2. [NEW] 비고(관리고객 제외) 필터 버튼
-        # 기본값 False = 전체 보기 (미적용)
-        # True = 필터 적용 (제외 문구가 있는 데이터 숨김)
+        # 2. 비고(관리고객 제외) 필터
         exclude_note = st.toggle("🚫 비고(관리고객 제외) 적용", value=False)
         
         # 3. 월정료 필터 (Pills)
@@ -184,9 +182,9 @@ with st.sidebar:
         # 4. 해지 포함 여부 (기본값 True: 전체 보기)
         show_churn = st.toggle("🚨 해지예정 포함 보기", value=True)
         
-        # 5. 지도 테마 선택 (고급 옵션)
+        # 5. 지도 테마 선택
         st.markdown("---")
-        st.caption("🎨 지도 스타일 (Map Theme)")
+        st.caption("🎨 지도 스타일")
         map_theme = st.selectbox(
             "지도 배경 선택", 
             ["라이트 (기본)", "다크 (야간모드)", "상세 (OpenStreet)"],
@@ -195,13 +193,14 @@ with st.sidebar:
         
         st.markdown("---")
         
-        # 6. 상세 구역 필터 (Expander)
+        # 6. 상세 구역 필터
         with st.expander("📂 지사 및 구역 선택", expanded=True):
             # 지사 (Pills)
             sel_branch = []
             if '담당부서2' in df_new.columns:
                 st.caption("지사 (Branch)")
-                all_branches = sorted(df_new['담당부서2'].unique().dropna(), key=lambda x: x if x in ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주'] else 'ㅎ')
+                # 정렬된 순서 유지
+                all_branches = df_new['담당부서2'].unique()
                 sel_branch = st.pills("지사", all_branches, selection_mode="multi", label_visibility="collapsed")
             
             # 영업구역 (동적 Pills)
@@ -229,11 +228,10 @@ if menu == "2026 관리고객 DB":
         st.error("데이터 파일(db.csv)이 없습니다.")
         st.stop()
 
-    # --- Data Filtering Logic ---
+    # --- Data Filtering ---
     filtered = df_new.copy()
     
-    # 1. [NEW] 비고(관리고객 제외) 필터링
-    # exclude_note가 True(적용)이면, 비고란이 비어있는(NaN or '') 데이터만 남김
+    # 1. 비고 제외 필터
     if exclude_note:
         filtered = filtered[
             filtered['비고(관리고객 제외)'].isna() | 
@@ -277,7 +275,6 @@ if menu == "2026 관리고객 DB":
     k1, k2, k3, k4 = st.columns(4)
     unique_contracts = filtered['계약번호'].nunique()
     total_amount = filtered['월정료_숫자'].sum()
-    # 제외 대상 카운트 (전체 - 현재 필터된 수, 단순 계산용)
     excluded_count = len(df_new) - len(filtered)
     
     def kpi_card(label, value, color="black"):
@@ -290,15 +287,14 @@ if menu == "2026 관리고객 DB":
     with k1: st.markdown(kpi_card("총 데이터 (Rows)", f"{len(filtered):,}건"), unsafe_allow_html=True)
     with k2: st.markdown(kpi_card("총 계약 (Unique)", f"{unique_contracts:,}건", "#4f46e5"), unsafe_allow_html=True)
     with k3: st.markdown(kpi_card("총 월정료", f"{total_amount/10000:,.0f}만원", "#059669"), unsafe_allow_html=True)
-    # 필터에 따라 제외된 수 표시 (참고용)
     with k4: st.markdown(kpi_card("필터 제외 건수", f"{excluded_count:,}건", "#6b7280"), unsafe_allow_html=True)
 
     st.markdown("###")
 
-    # --- [TOP] Map Visualization (Selection-Aware & Themed) ---
+    # --- [TOP] Map Visualization ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     
-    # 지도 모드 확인
+    # 지도 모드 확인 (선택된 행)
     if 'selected_rows_indices' not in st.session_state:
         st.session_state.selected_rows_indices = []
 
@@ -322,13 +318,10 @@ if menu == "2026 관리고객 DB":
     st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳)</div>', unsafe_allow_html=True)
 
     if not map_valid_df.empty:
-        # [고급화] 지도 테마 적용
-        if "다크" in map_theme:
-            tile_layer = "cartodbdark_matter"
-        elif "상세" in map_theme:
-            tile_layer = "openstreetmap"
-        else:
-            tile_layer = "cartodbpositron" # 기본 라이트
+        # 지도 테마 설정
+        if "다크" in map_theme: tile_layer = "cartodbdark_matter"
+        elif "상세" in map_theme: tile_layer = "openstreetmap"
+        else: tile_layer = "cartodbpositron"
 
         m = folium.Map(
             location=st.session_state.map_center, 
@@ -336,7 +329,6 @@ if menu == "2026 관리고객 DB":
             tiles=tile_layer
         )
         
-        # [고급화] 미니맵 및 풀스크린 컨트롤 추가
         MiniMap(toggle_display=True).add_to(m)
         Fullscreen().add_to(m)
         
@@ -347,7 +339,6 @@ if menu == "2026 관리고객 DB":
             is_churn = row['해지여부'] == '해지예정'
             color = 'red' if is_churn else 'blue'
             
-            # 텍스트 라벨 (선택됨 or 소수 데이터일 때)
             if len(map_valid_df) <= 10:
                 txt_color = "white" if "다크" in map_theme else "black"
                 shadow = "none" if "다크" in map_theme else "1px 1px 0 #fff"
@@ -385,7 +376,7 @@ if menu == "2026 관리고객 DB":
         st.warning("표시할 위치 데이터가 없습니다.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- [MIDDLE] Detailed Data List (Selectable) ---
+    # --- [MIDDLE] Detailed Data List ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-header">📋 상세 데이터 리스트 (체크하면 지도에 표시)</div>', unsafe_allow_html=True)
     
@@ -422,7 +413,8 @@ if menu == "2026 관리고객 DB":
         if '담당부서2' in filtered.columns:
             counts = filtered['담당부서2'].value_counts().reset_index()
             counts.columns = ['지사', '고객수']
-            fig1 = px.bar(counts, x='지사', y='고객수', color='고객수', color_continuous_scale='indigo', title="지사별 고객 분포")
+            # [수정] color_continuous_scale 오류 해결 -> 'Purples' 적용
+            fig1 = px.bar(counts, x='지사', y='고객수', color='고객수', color_continuous_scale='Purples', title="지사별 고객 분포")
             fig1.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=300)
             st.plotly_chart(fig1, use_container_width=True)
 
@@ -448,7 +440,8 @@ if menu == "2026 관리고객 DB":
         if '영업구역정보' in filtered.columns:
             top_sales = filtered['영업구역정보'].value_counts().nlargest(10).reset_index()
             top_sales.columns = ['영업구역', '고객수']
-            fig5 = px.treemap(top_sales, path=['영업구역'], values='고객수', title="핵심 영업구역 Top 10", color='고객수', color_continuous_scale='Mint')
+            # [수정] Mint -> Teal (안전한 색상표 사용)
+            fig5 = px.treemap(top_sales, path=['영업구역'], values='고객수', title="핵심 영업구역 Top 10", color='고객수', color_continuous_scale='Teal')
             fig5.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig5, use_container_width=True)
 
