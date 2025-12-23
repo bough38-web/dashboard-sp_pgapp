@@ -19,7 +19,7 @@ if 'map_center' not in st.session_state:
 if 'map_zoom' not in st.session_state:
     st.session_state.map_zoom = 11
 
-# [CSS] Expert UI/UX Styling (벤치마킹 스타일 적용)
+# [CSS] Expert UI/UX Styling
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap');
@@ -27,7 +27,7 @@ st.markdown("""
         :root {
             --primary: #4f46e5; --primary-light: #e0e7ff;
             --bg-color: #f8fafc; --surface: #ffffff;
-            --text-main: #1e293b; --text-sub: #64748b;
+            --text-main: #1f2937; --text-sub: #64748b;
         }
         
         .stApp { background-color: var(--bg-color); font-family: 'Pretendard', sans-serif; }
@@ -54,7 +54,15 @@ st.markdown("""
             margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
             border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;
         }
-        .section-header i { color: var(--primary); }
+
+        /* KPI Custom Style */
+        .kpi-box {
+            background-color: white; padding: 15px; border-radius: 12px;
+            border: 1px solid #e5e7eb; text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .kpi-title { font-size: 12px; color: #6b7280; font-weight: 700; text-transform: uppercase; }
+        .kpi-value { font-size: 24px; color: #111827; font-weight: 800; margin: 5px 0; }
 
         /* Custom Pills Styling */
         div[data-testid="stPills"] { gap: 8px; flex-wrap: wrap; }
@@ -114,6 +122,10 @@ def load_data():
                 df['주소(지역)'] = df['군구'].fillna('') + ' ' + df['읍면동'].fillna('')
             else:
                 df['주소(지역)'] = df['설치주소']
+
+            # 지도 링크 확인
+            if '지도링크_URL' not in df.columns:
+                df['지도링크_URL'] = ''
 
             # 지사명 정제 및 정렬
             if '담당부서2' in df.columns:
@@ -207,11 +219,10 @@ if menu == "2026 관리고객 DB":
     if sel_branch: filtered = filtered[filtered['담당부서2'].isin(sel_branch)]
     if sel_sales: filtered = filtered[filtered['영업구역정보'].isin(sel_sales)]
 
-    # --- Header ---
+    # --- Header & KPIs ---
     c1, c2 = st.columns([3, 1])
     with c1:
         st.title("📂 2026 관리고객 DB")
-        st.markdown(f"<span style='color:#6b7280; font-weight:600;'>총 조회된 고객: {len(filtered):,}명</span>", unsafe_allow_html=True)
     with c2:
         st.markdown(f"""
             <div style='text-align:right; padding:10px;'>
@@ -221,9 +232,31 @@ if menu == "2026 관리고객 DB":
             </div>
         """, unsafe_allow_html=True)
 
+    # --- [KPI Section] Contract Count Added ---
+    k1, k2, k3, k4 = st.columns(4)
+    
+    unique_contracts = filtered['계약번호'].nunique()
+    total_amount = filtered['월정료_숫자'].sum()
+    churn_count = len(filtered[filtered['해지여부'] == '해지예정'])
+    
+    def kpi_card(label, value, color="black"):
+        return f"""
+        <div class="kpi-box">
+            <div class="kpi-title">{label}</div>
+            <div class="kpi-value" style="color:{color}">{value}</div>
+        </div>
+        """
+        
+    with k1: st.markdown(kpi_card("총 데이터 (Rows)", f"{len(filtered):,}건"), unsafe_allow_html=True)
+    with k2: st.markdown(kpi_card("총 계약 (Unique)", f"{unique_contracts:,}건", "#4f46e5"), unsafe_allow_html=True)
+    with k3: st.markdown(kpi_card("총 월정료", f"{total_amount/10000:,.0f}만원", "#059669"), unsafe_allow_html=True)
+    with k4: st.markdown(kpi_card("해지 예정", f"{churn_count:,}건", "#dc2626"), unsafe_allow_html=True)
+
+    st.markdown("###")
+
     # --- [TOP] Map Visualization (Interconnected) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📍 고객 위치 모니터링 (리스트 선택 시 줌인)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📍 고객 위치 모니터링 (리스트 선택 시 자동 줌인)</div>', unsafe_allow_html=True)
     
     # 지도 데이터 준비
     map_df = filtered[(filtered['위도'] > 0) & (filtered['경도'] > 0)]
@@ -271,9 +304,10 @@ if menu == "2026 관리고객 DB":
 
     # --- [MIDDLE] Detailed Data List (Selectable) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (행을 클릭하세요)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (행을 클릭하면 지도 위치로 이동)</div>', unsafe_allow_html=True)
     
-    cols_show = ['관리고객명', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '기술구역정보', '구역정보', '해지여부']
+    # [수정] 지도링크_URL 포함
+    cols_show = ['관리고객명', '상호', '계약번호', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '해지여부', '지도링크_URL']
     final_cols = [c for c in cols_show if c in filtered.columns]
     
     # [핵심 기능] 행 선택 시 리런(Rerun)하여 지도 업데이트
@@ -286,24 +320,27 @@ if menu == "2026 관리고객 DB":
         selection_mode="single-row",
         column_config={
             "해지여부": st.column_config.TextColumn("상태"),
-            "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료")
+            "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료"),
+            # [복구] 지도가기 버튼 설정
+            "지도링크_URL": st.column_config.LinkColumn(
+                "길찾기", display_text="🔗 지도보기", help="클릭 시 지도 링크 이동"
+            )
         }
     )
     
     # 선택된 행 처리 -> 지도 중심 이동
     if selection.selection.rows:
         sel_idx = selection.selection.rows[0]
-        # 원본 데이터프레임에서의 인덱스를 찾아야 함 (필터링 되었으므로)
-        # filtered는 인덱스가 리셋되지 않았을 수 있음. iloc으로 접근
+        # 필터링된 데이터에서 행 찾기
         sel_row = filtered.iloc[sel_idx]
         
         if sel_row['위도'] > 0:
             new_lat, new_lng = sel_row['위도'], sel_row['경도']
-            # 세션 업데이트 (지도 줌인)
+            # 세션 업데이트 (지도 줌인) -> 값이 다를 때만 리런하여 루프 방지
             if st.session_state.map_center != [new_lat, new_lng]:
                 st.session_state.map_center = [new_lat, new_lng]
-                st.session_state.map_zoom = 15 # 상세 보기 줌 레벨
-                st.rerun() # 화면 갱신하여 지도 다시 그리기
+                st.session_state.map_zoom = 16 # 상세 보기 줌 레벨 (더 확대)
+                st.rerun() 
     
     st.markdown('</div>', unsafe_allow_html=True)
 
