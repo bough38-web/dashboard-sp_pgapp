@@ -13,75 +13,60 @@ st.set_page_config(
     layout="wide"
 )
 
-# [Session State] 지도 중심점 관리를 위한 세션 초기화
+# [Session State] 지도 중심점/줌 관리 (리스트 선택 시 연동용)
 if 'map_center' not in st.session_state:
-    st.session_state.map_center = [37.5665, 126.9780] # 서울 시청 기본값
+    st.session_state.map_center = [37.5665, 126.9780] # 기본값: 서울시청
 if 'map_zoom' not in st.session_state:
     st.session_state.map_zoom = 11
 
-# [CSS] Expert UI/UX Styling (Glassmorphism & Clean Layout)
+# [CSS] Expert UI/UX Styling (벤치마킹 스타일 적용)
 st.markdown("""
     <style>
-        /* Global Font & Colors */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap');
+        
         :root {
-            --primary: #6366f1; --primary-dark: #4f46e5;
-            --bg-color: #f3f4f6; --card-bg: #ffffff;
-            --text-main: #1f2937; --text-sub: #6b7280;
+            --primary: #4f46e5; --primary-light: #e0e7ff;
+            --bg-color: #f8fafc; --surface: #ffffff;
+            --text-main: #1e293b; --text-sub: #64748b;
         }
         
-        .stApp { background-color: var(--bg-color); font-family: 'Inter', sans-serif; }
-        .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px; }
+        .stApp { background-color: var(--bg-color); font-family: 'Pretendard', sans-serif; }
+        .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1400px; }
 
-        /* Advanced Card Design (Glassmorphism inspired) */
+        /* Advanced Card Design */
         .dashboard-card {
-            background: var(--card-bg);
+            background: var(--surface);
             border-radius: 16px;
             padding: 24px;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            border: 1px solid rgba(255,255,255,0.5);
+            border: 1px solid #e2e8f0;
             margin-bottom: 24px;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            transition: all 0.3s ease;
         }
         .dashboard-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
         }
 
         /* Section Headers */
         .section-header {
             font-size: 18px; font-weight: 800; color: var(--text-main);
             margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+            border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;
         }
-        .section-header::before {
-            content: ''; display: block; width: 4px; height: 18px;
-            background: var(--primary); border-radius: 2px;
-        }
+        .section-header i { color: var(--primary); }
 
-        /* KPI Cards */
-        .metric-container {
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            padding: 16px; border-radius: 12px; background: #f9fafb; border: 1px solid #e5e7eb;
-        }
-        .metric-label { font-size: 13px; font-weight: 600; color: var(--text-sub); text-transform: uppercase; }
-        .metric-value { font-size: 28px; font-weight: 800; color: var(--primary-dark); margin: 4px 0; }
-
-        /* Custom Pills (st.pills styling override) */
+        /* Custom Pills Styling */
         div[data-testid="stPills"] { gap: 8px; flex-wrap: wrap; }
         div[data-testid="stPills"] button {
             border: 1px solid #e5e7eb !important; border-radius: 20px !important;
             padding: 6px 16px !important; font-size: 13px !important; font-weight: 600 !important;
             background-color: white !important; color: var(--text-sub) !important;
-            transition: all 0.2s;
         }
         div[data-testid="stPills"] button[data-selected="true"] {
             background-color: var(--primary) !important; color: white !important;
-            border-color: var(--primary) !important; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+            border-color: var(--primary) !important; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
         }
-        div[data-testid="stPills"] button:hover { border-color: var(--primary) !important; color: var(--primary) !important; }
-
-        /* Expander Customization */
-        .streamlit-expanderHeader { background-color: white; border-radius: 8px; border: 1px solid #e5e7eb; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -91,13 +76,12 @@ def load_data():
     files = {'old': 'papp.csv', 'new': 'db.csv'}
     data = {'old': None, 'new': None}
     
-    # 1. 기존 데이터 로드
+    # 1. 기존 데이터 로드 (papp.csv)
     for fname in ['papp.csv', 'papp.xlsx']:
         if os.path.exists(fname):
             try:
                 df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
                 if '구분' in df.columns: df = df[df['구분'] != '소계']
-                # 숫자 변환
                 for c in ['대상', '해지', '해지율']:
                     if c in df.columns:
                         df[c] = pd.to_numeric(df[c].astype(str).str.replace(r'[,%]', '', regex=True), errors='coerce').fillna(0)
@@ -107,7 +91,7 @@ def load_data():
                 break
             except: continue
 
-    # 2. 2026 DB 로드
+    # 2. 2026 DB 로드 (db.csv)
     if os.path.exists(files['new']):
         try:
             df = pd.read_csv(files['new'])
@@ -121,7 +105,7 @@ def load_data():
             if '계약번호' in df.columns:
                 df['계약번호'] = df['계약번호'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-            # 해지 여부 (변경요청 '삭제' 포함)
+            # 해지 여부
             if '변경요청' not in df.columns: df['변경요청'] = ''
             df['해지여부'] = df['변경요청'].apply(lambda x: '해지예정' if str(x).strip() == '삭제' else '유지')
 
@@ -131,10 +115,11 @@ def load_data():
             else:
                 df['주소(지역)'] = df['설치주소']
 
-            # 지사명 정제
+            # 지사명 정제 및 정렬
             if '담당부서2' in df.columns:
                 df['담당부서2'] = df['담당부서2'].astype(str).str.replace('지사', '')
                 custom_order = ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주']
+                # 정렬 순서에 없는 값은 뒤로 보내기 위해 Categorical 사용
                 df['담당부서2'] = pd.Categorical(df['담당부서2'], categories=custom_order, ordered=True)
                 df = df.sort_values('담당부서2')
                 
@@ -149,8 +134,11 @@ df_old = data_pack['old']
 
 # === 3. [Sidebar] 메뉴 및 필터 ===
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2920/2920323.png", width=40)
-    st.markdown("<h3 style='margin-top:0;'>KTT System</h3>", unsafe_allow_html=True)
+    st.markdown("""
+        <div style="padding:15px 0; border-bottom:1px solid #e2e8f0; margin-bottom:20px;">
+            <span style="font-size:18px; font-weight:900; color:#4f46e5;">💎 KTT System</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     menu = option_menu(
         None, ["2026 관리고객 DB", "기존 대시보드", "설정"],
@@ -180,7 +168,7 @@ with st.sidebar:
         
         # 4. 상세 구역 필터 (Expander)
         with st.expander("📂 지사 및 구역 선택", expanded=True):
-            # 지사 (Pills로 변경 요청 반영)
+            # 지사 (Pills)
             if '담당부서2' in df_new.columns:
                 st.caption("지사 (Branch)")
                 all_branches = df_new['담당부서2'].unique().dropna()
@@ -219,7 +207,7 @@ if menu == "2026 관리고객 DB":
     if sel_branch: filtered = filtered[filtered['담당부서2'].isin(sel_branch)]
     if sel_sales: filtered = filtered[filtered['영업구역정보'].isin(sel_sales)]
 
-    # --- Header & KPIs ---
+    # --- Header ---
     c1, c2 = st.columns([3, 1])
     with c1:
         st.title("📂 2026 관리고객 DB")
@@ -235,24 +223,18 @@ if menu == "2026 관리고객 DB":
 
     # --- [TOP] Map Visualization (Interconnected) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📍 고객 위치 모니터링 (Zoom Interactive)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📍 고객 위치 모니터링 (리스트 선택 시 줌인)</div>', unsafe_allow_html=True)
     
-    # 좌표 데이터 준비
+    # 지도 데이터 준비
     map_df = filtered[(filtered['위도'] > 0) & (filtered['경도'] > 0)]
     
     if not map_df.empty:
-        # 중심점 계산 logic
-        # 1. 사용자가 리스트에서 선택했으면 그 위치로
-        # 2. 아니면 필터된 데이터의 평균 위치로
-        # 3. 데이터 없으면 서울시청
-        
-        # 기본 중심
-        center_lat = map_df['위도'].mean()
-        center_lng = map_df['경도'].mean()
-        zoom_level = 11
-
-        # 지도 생성 (CartoDB Positron)
-        m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom_level, tiles='cartodbpositron')
+        # 지도 생성 (Center, Zoom은 session_state 사용)
+        m = folium.Map(
+            location=st.session_state.map_center, 
+            zoom_start=st.session_state.map_zoom, 
+            tiles='cartodbpositron'
+        )
         
         from folium.plugins import MarkerCluster
         mc = MarkerCluster().add_to(m)
@@ -262,7 +244,7 @@ if menu == "2026 관리고객 DB":
             color = 'red' if is_churn else 'blue'
             
             popup_html = f"""
-            <div style="font-family:'Inter',sans-serif; width:220px;">
+            <div style="font-family:'Pretendard',sans-serif; width:220px;">
                 <h5 style="margin:0; color:#4f46e5; border-bottom:1px solid #eee; padding-bottom:5px;">
                     {row['관리고객명']}
                 </h5>
@@ -281,49 +263,51 @@ if menu == "2026 관리고객 DB":
                 icon=folium.Icon(color=color, icon='info-sign')
             ).add_to(mc)
 
-        # 지도 표시 (높이 조절)
-        st_data = st_folium(m, width="100%", height=450, returned_objects=[])
+        # 지도 그리기
+        st_folium(m, width="100%", height=450, returned_objects=[])
     else:
         st.warning("표시할 위치 데이터가 없습니다.")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- [MIDDLE] Detailed Data List (Selectable) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (선택 시 지도 이동)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (행을 클릭하세요)</div>', unsafe_allow_html=True)
     
-    cols_show = ['관리고객명', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '기술구역정보', '구역정보', '해지여부', '지도링크_URL']
+    cols_show = ['관리고객명', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '기술구역정보', '구역정보', '해지여부']
     final_cols = [c for c in cols_show if c in filtered.columns]
     
-    # [핵심] selection_mode='single-row' 적용하여 선택 기능 활성화
+    # [핵심 기능] 행 선택 시 리런(Rerun)하여 지도 업데이트
     selection = st.dataframe(
         filtered[final_cols],
         use_container_width=True,
         height=400,
         hide_index=True,
-        on_select="rerun", # 선택 시 리런하여 지도 업데이트 (Streamlit 1.35+)
+        on_select="rerun",
         selection_mode="single-row",
         column_config={
-            "지도링크_URL": st.column_config.LinkColumn("길찾기", display_text="🔗"),
             "해지여부": st.column_config.TextColumn("상태"),
             "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료")
         }
     )
     
-    # 선택된 행 처리 (줌인 기능 구현을 위한 Logic)
-    # 선택된 행이 있다면, 다음 리런 때 지도 중심을 그곳으로 바꾸기 위해 세션 업데이트를 고려할 수 있으나,
-    # st_folium은 리런될 때 center 값을 동적으로 받으려면 키를 바꾸거나 해야 함.
-    # 여기서는 "선택된 행"의 정보를 상단에 알림으로 띄워줌 (지도 자동 이동은 복잡한 state 관리가 필요하므로)
+    # 선택된 행 처리 -> 지도 중심 이동
     if selection.selection.rows:
         sel_idx = selection.selection.rows[0]
+        # 원본 데이터프레임에서의 인덱스를 찾아야 함 (필터링 되었으므로)
+        # filtered는 인덱스가 리셋되지 않았을 수 있음. iloc으로 접근
         sel_row = filtered.iloc[sel_idx]
+        
         if sel_row['위도'] > 0:
-            st.toast(f"📍 '{sel_row['관리고객명']}' 위치로 이동합니다.", icon="🗺️")
-            # NOTE: 지도 자동 줌을 위해서는 map center state를 업데이트하고 리런해야 함.
-            # 이 코드는 구조상 위쪽에서 지도를 먼저 그리므로, 다음 인터랙션에 반영됨.
+            new_lat, new_lng = sel_row['위도'], sel_row['경도']
+            # 세션 업데이트 (지도 줌인)
+            if st.session_state.map_center != [new_lat, new_lng]:
+                st.session_state.map_center = [new_lat, new_lng]
+                st.session_state.map_zoom = 15 # 상세 보기 줌 레벨
+                st.rerun() # 화면 갱신하여 지도 다시 그리기
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- [BOTTOM] 5-Type Visualizations ---
+    # --- [BOTTOM] 5-Way Visualizations ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-header">📊 통합 분석 대시보드 (5-Way Analysis)</div>', unsafe_allow_html=True)
 
@@ -362,7 +346,7 @@ if menu == "2026 관리고객 DB":
         st.plotly_chart(fig4, use_container_width=True)
         
     with vc5:
-        # 5. 주요 영업구역 (Treemap style Bar for Top 10)
+        # 5. 주요 영업구역 (Treemap)
         if '영업구역정보' in filtered.columns:
             top_sales = filtered['영업구역정보'].value_counts().nlargest(10).reset_index()
             top_sales.columns = ['영업구역', '고객수']
@@ -380,10 +364,9 @@ elif menu == "기존 대시보드":
     if df_old is None:
         st.warning("기존 데이터(papp.csv)가 없습니다.")
     else:
-        # Simple Logic for Existing Dashboard
         st.header("📊 기존 성과 대시보드")
         
-        # Filter
+        # Simple Filter
         all_regions = sorted(df_old['구분'].unique()) if '구분' in df_old.columns else []
         sel_regions = st.multiselect("지사 선택", all_regions, default=all_regions)
         sub_df = df_old[df_old['구분'].isin(sel_regions)] if '구분' in df_old.columns else df_old
@@ -395,7 +378,9 @@ elif menu == "기존 대시보드":
         k3.metric("해지율", f"{sub_df['해지율'].mean():.1f}%")
         k4.metric("방어율", f"{sub_df['유지(방어)율'].mean():.1f}%")
         
-        # Simple Charts
+        st.markdown("---")
+        
+        # Charts
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("지사별 방어율")
@@ -414,4 +399,3 @@ elif menu == "설정":
     st.title("⚙️ 시스템 설정")
     with st.expander("데이터 파일 관리", expanded=True):
         st.file_uploader("DB 파일 업로드 (csv/xlsx)", accept_multiple_files=False)
-        st.caption("업로드된 파일은 자동으로 시스템에 반영됩니다.")
