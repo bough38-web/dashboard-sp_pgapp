@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import folium
+from folium.features import DivIcon
 from streamlit_folium import st_folium
 from streamlit_option_menu import option_menu
 import os
@@ -13,9 +14,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# [Session State] 지도 중심점/줌 관리 (리스트 선택 시 연동용)
+# [Session State] 지도 중심점/줌 관리
 if 'map_center' not in st.session_state:
-    st.session_state.map_center = [37.5665, 126.9780] # 기본값: 서울시청
+    st.session_state.map_center = [37.5665, 126.9780]
 if 'map_zoom' not in st.session_state:
     st.session_state.map_zoom = 11
 
@@ -64,7 +65,7 @@ st.markdown("""
         .kpi-title { font-size: 12px; color: #6b7280; font-weight: 700; text-transform: uppercase; }
         .kpi-value { font-size: 24px; color: #111827; font-weight: 800; margin: 5px 0; }
 
-        /* Custom Pills Styling */
+        /* Pills Styling */
         div[data-testid="stPills"] { gap: 8px; flex-wrap: wrap; }
         div[data-testid="stPills"] button {
             border: 1px solid #e5e7eb !important; border-radius: 20px !important;
@@ -123,7 +124,6 @@ def load_data():
             else:
                 df['주소(지역)'] = df['설치주소']
 
-            # 지도 링크 확인
             if '지도링크_URL' not in df.columns:
                 df['지도링크_URL'] = ''
 
@@ -131,7 +131,6 @@ def load_data():
             if '담당부서2' in df.columns:
                 df['담당부서2'] = df['담당부서2'].astype(str).str.replace('지사', '')
                 custom_order = ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주']
-                # 정렬 순서에 없는 값은 뒤로 보내기 위해 Categorical 사용
                 df['담당부서2'] = pd.Categorical(df['담당부서2'], categories=custom_order, ordered=True)
                 df = df.sort_values('담당부서2')
                 
@@ -173,26 +172,36 @@ with st.sidebar:
         price_opts = ["전체", "10만 미만", "30만 미만", "50만 이상"]
         sel_price = st.pills("월정료", price_opts, default="전체", label_visibility="collapsed")
         
-        # 3. 해지 포함 여부
-        show_churn = st.toggle("🚨 해지예정 고객 포함", value=False)
+        # 3. [수정] 해지 포함 여부 (기본값을 True로 변경하여 전체 데이터 표시)
+        show_churn = st.toggle("🚨 해지예정 포함 보기", value=True)
         
         st.markdown("---")
         
         # 4. 상세 구역 필터 (Expander)
         with st.expander("📂 지사 및 구역 선택", expanded=True):
             # 지사 (Pills)
+            sel_branch = []
             if '담당부서2' in df_new.columns:
                 st.caption("지사 (Branch)")
-                all_branches = df_new['담당부서2'].unique().dropna()
+                all_branches = sorted(df_new['담당부서2'].unique().dropna(), key=lambda x: x if x in ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주'] else 'ㅎ')
                 sel_branch = st.pills("지사", all_branches, selection_mode="multi", label_visibility="collapsed")
-            else: sel_branch = []
             
-            # 영업구역
+            # 영업구역 (동적 Pills 적용)
+            sel_sales = []
             if '영업구역정보' in df_new.columns:
                 st.caption("영업구역")
-                all_sales = sorted(df_new['영업구역정보'].astype(str).unique())
-                sel_sales = st.multiselect("영업구역", all_sales, label_visibility="collapsed")
-            else: sel_sales = []
+                # 지사가 선택되었다면 해당 지사의 영업구역만 표시
+                if sel_branch:
+                    filtered_for_opts = df_new[df_new['담당부서2'].isin(sel_branch)]
+                    all_sales = sorted(filtered_for_opts['영업구역정보'].astype(str).unique())
+                else:
+                    all_sales = sorted(df_new['영업구역정보'].astype(str).unique())
+                
+                # [수정] 옵션 개수가 적으면 버튼(Pills), 많으면 멀티셀렉트로 자동 전환
+                if len(all_sales) <= 20:
+                    sel_sales = st.pills("영업구역", all_sales, selection_mode="multi", label_visibility="collapsed")
+                else:
+                    sel_sales = st.multiselect("영업구역", all_sales, label_visibility="collapsed")
 
 # === 4. [Main] 콘텐츠 영역 ===
 
@@ -206,16 +215,23 @@ if menu == "2026 관리고객 DB":
 
     # --- Data Filtering ---
     filtered = df_new.copy()
+    
+    # 1. 해지 필터 (기본 포함)
     if not show_churn: filtered = filtered[filtered['해지여부'] == '유지']
+    
+    # 2. 검색
     if search_txt:
         filtered = filtered[
             filtered['관리고객명'].astype(str).str.contains(search_txt, case=False) |
             filtered['계약번호'].astype(str).str.contains(search_txt, case=False)
         ]
+    # 3. 금액
     if sel_price != "전체":
         limit = 100000 if "10만" in sel_price else (300000 if "30만" in sel_price else 500000)
         if "이상" in sel_price: filtered = filtered[filtered['월정료_숫자'] >= limit]
         else: filtered = filtered[filtered['월정료_숫자'] < limit]
+        
+    # 4. 구역
     if sel_branch: filtered = filtered[filtered['담당부서2'].isin(sel_branch)]
     if sel_sales: filtered = filtered[filtered['영업구역정보'].isin(sel_sales)]
 
@@ -232,9 +248,8 @@ if menu == "2026 관리고객 DB":
             </div>
         """, unsafe_allow_html=True)
 
-    # --- [KPI Section] Contract Count Added ---
+    # --- [KPI Section] ---
     k1, k2, k3, k4 = st.columns(4)
-    
     unique_contracts = filtered['계약번호'].nunique()
     total_amount = filtered['월정료_숫자'].sum()
     churn_count = len(filtered[filtered['해지여부'] == '해지예정'])
@@ -246,7 +261,6 @@ if menu == "2026 관리고객 DB":
             <div class="kpi-value" style="color:{color}">{value}</div>
         </div>
         """
-        
     with k1: st.markdown(kpi_card("총 데이터 (Rows)", f"{len(filtered):,}건"), unsafe_allow_html=True)
     with k2: st.markdown(kpi_card("총 계약 (Unique)", f"{unique_contracts:,}건", "#4f46e5"), unsafe_allow_html=True)
     with k3: st.markdown(kpi_card("총 월정료", f"{total_amount/10000:,.0f}만원", "#059669"), unsafe_allow_html=True)
@@ -254,15 +268,43 @@ if menu == "2026 관리고객 DB":
 
     st.markdown("###")
 
-    # --- [TOP] Map Visualization (Interconnected) ---
+    # --- [TOP] Map Visualization (Selection-Aware) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📍 고객 위치 모니터링 (리스트 선택 시 자동 줌인)</div>', unsafe_allow_html=True)
     
-    # 지도 데이터 준비
-    map_df = filtered[(filtered['위도'] > 0) & (filtered['경도'] > 0)]
+    # 지도 모드: 체크박스로 선택된 데이터가 있으면 그것만, 없으면 필터된 전체
+    # st.session_state에 선택된 행 정보가 있는지 확인 (아래 리스트 코드에서 저장)
+    if 'selected_rows_indices' not in st.session_state:
+        st.session_state.selected_rows_indices = []
+
+    # 지도에 표시할 데이터 결정
+    if st.session_state.selected_rows_indices:
+        # 선택된 행이 있다면 해당 행만 지도에 표시
+        # 인덱스는 filtered 기준이므로 iloc 사용
+        try:
+            map_target_df = filtered.iloc[st.session_state.selected_rows_indices]
+            # 줌 레벨과 중심점도 선택된 데이터로 이동
+            if not map_target_df.empty:
+                center_lat = map_target_df['위도'].mean()
+                center_lng = map_target_df['경도'].mean()
+                zoom_level = 15 # 상세 줌
+                
+                # 세션 상태 업데이트 (리런 시 반영)
+                if st.session_state.map_center != [center_lat, center_lng]:
+                    st.session_state.map_center = [center_lat, center_lng]
+                    st.session_state.map_zoom = zoom_level
+                    st.rerun()
+        except:
+            map_target_df = filtered # 오류 시 전체
+    else:
+        # 선택된 게 없으면 필터된 전체 데이터 표시
+        map_target_df = filtered
+        
+    map_valid_df = map_target_df[(map_target_df['위도'] > 0) & (map_target_df['경도'] > 0)]
     
-    if not map_df.empty:
-        # 지도 생성 (Center, Zoom은 session_state 사용)
+    st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳 표시)</div>', unsafe_allow_html=True)
+
+    if not map_valid_df.empty:
+        # 지도 생성
         m = folium.Map(
             location=st.session_state.map_center, 
             zoom_start=st.session_state.map_zoom, 
@@ -270,12 +312,28 @@ if menu == "2026 관리고객 DB":
         )
         
         from folium.plugins import MarkerCluster
-        mc = MarkerCluster().add_to(m)
+        # 데이터가 적으면(선택 시) 클러스터 없이 바로 표시, 많으면 클러스터
+        if len(map_valid_df) <= 5:
+            mc = m # 클러스터 안씀
+        else:
+            mc = MarkerCluster().add_to(m)
 
-        for _, row in map_df.iterrows():
+        for _, row in map_valid_df.iterrows():
             is_churn = row['해지여부'] == '해지예정'
             color = 'red' if is_churn else 'blue'
             
+            # [기능] 지도 텍스트 라벨 (DivIcon) - 상호명 표시
+            # 선택된 상태거나 데이터가 적을 때만 텍스트 표시하여 겹침 방지
+            if len(map_valid_df) <= 10:
+                folium.map.Marker(
+                    [row['위도'], row['경도']],
+                    icon=DivIcon(
+                        icon_size=(150,36),
+                        icon_anchor=(75, -10),
+                        html=f'<div style="font-size: 11px; font-weight: bold; color: {color}; text-align: center; text-shadow: 1px 1px 0 #fff;">{row["상호"]}</div>',
+                    )
+                ).add_to(m)
+
             popup_html = f"""
             <div style="font-family:'Pretendard',sans-serif; width:220px;">
                 <h5 style="margin:0; color:#4f46e5; border-bottom:1px solid #eee; padding-bottom:5px;">
@@ -285,18 +343,17 @@ if menu == "2026 관리고객 DB":
                     <b>지사:</b> {row['담당부서2']}<br>
                     <b>월정료:</b> {row['합산월정료(KTT+KT)']}<br>
                     <b>주소:</b> {row['주소(지역)']}<br>
-                    <span style='color:#9ca3af; font-size:11px;'>{row.get('영업구역정보','-')} | {row.get('구역정보','-')}</span>
+                    <span style='color:#9ca3af; font-size:11px;'>{row.get('영업구역정보','-')}</span>
                 </div>
             </div>
             """
             folium.Marker(
                 [row['위도'], row['경도']],
                 popup=folium.Popup(popup_html, max_width=250),
-                tooltip=f"{row['관리고객명']} ({row['담당부서2']})",
+                tooltip=f"{row['상호']}",
                 icon=folium.Icon(color=color, icon='info-sign')
             ).add_to(mc)
 
-        # 지도 그리기
         st_folium(m, width="100%", height=450, returned_objects=[])
     else:
         st.warning("표시할 위치 데이터가 없습니다.")
@@ -304,43 +361,30 @@ if menu == "2026 관리고객 DB":
 
     # --- [MIDDLE] Detailed Data List (Selectable) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (행을 클릭하면 지도 위치로 이동)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📋 상세 데이터 리스트 (체크하면 지도에 표시)</div>', unsafe_allow_html=True)
     
-    # [수정] 지도링크_URL 포함
     cols_show = ['관리고객명', '상호', '계약번호', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '해지여부', '지도링크_URL']
     final_cols = [c for c in cols_show if c in filtered.columns]
     
-    # [핵심 기능] 행 선택 시 리런(Rerun)하여 지도 업데이트
+    # [핵심] 멀티 선택 모드 적용
     selection = st.dataframe(
         filtered[final_cols],
         use_container_width=True,
         height=400,
         hide_index=True,
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row", # 다중 선택 가능
         column_config={
             "해지여부": st.column_config.TextColumn("상태"),
             "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료"),
-            # [복구] 지도가기 버튼 설정
-            "지도링크_URL": st.column_config.LinkColumn(
-                "길찾기", display_text="🔗 지도보기", help="클릭 시 지도 링크 이동"
-            )
+            "지도링크_URL": st.column_config.LinkColumn("길찾기", display_text="🔗")
         }
     )
     
-    # 선택된 행 처리 -> 지도 중심 이동
-    if selection.selection.rows:
-        sel_idx = selection.selection.rows[0]
-        # 필터링된 데이터에서 행 찾기
-        sel_row = filtered.iloc[sel_idx]
-        
-        if sel_row['위도'] > 0:
-            new_lat, new_lng = sel_row['위도'], sel_row['경도']
-            # 세션 업데이트 (지도 줌인) -> 값이 다를 때만 리런하여 루프 방지
-            if st.session_state.map_center != [new_lat, new_lng]:
-                st.session_state.map_center = [new_lat, new_lng]
-                st.session_state.map_zoom = 16 # 상세 보기 줌 레벨 (더 확대)
-                st.rerun() 
+    # 선택 상태 저장 (지도 업데이트용)
+    if selection.selection.rows != st.session_state.selected_rows_indices:
+        st.session_state.selected_rows_indices = selection.selection.rows
+        st.rerun() # 변경 시 즉시 지도 갱신
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -352,7 +396,6 @@ if menu == "2026 관리고객 DB":
     vc1, vc2, vc3 = st.columns(3)
     
     with vc1:
-        # 1. 지사별 고객 수 (Bar)
         if '담당부서2' in filtered.columns:
             counts = filtered['담당부서2'].value_counts().reset_index()
             counts.columns = ['지사', '고객수']
@@ -361,14 +404,12 @@ if menu == "2026 관리고객 DB":
             st.plotly_chart(fig1, use_container_width=True)
 
     with vc2:
-        # 2. BM 분포 (Donut)
         if 'BM' in filtered.columns:
             fig2 = px.pie(filtered, names='BM', title="BM(비즈니스) 유형", hole=0.5, color_discrete_sequence=px.colors.qualitative.Prism)
             fig2.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig2, use_container_width=True)
             
     with vc3:
-        # 3. 해지 리스크 (Pie)
         fig3 = px.pie(filtered, names='해지여부', title="해지 vs 유지 현황", color_discrete_map={'유지':'#6366f1', '해지예정':'#ef4444'})
         fig3.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig3, use_container_width=True)
@@ -377,13 +418,11 @@ if menu == "2026 관리고객 DB":
     vc4, vc5 = st.columns(2)
     
     with vc4:
-        # 4. 월정료 분포 (Histogram)
         fig4 = px.histogram(filtered, x='월정료_숫자', nbins=20, title="월정료 가격대 분포", color_discrete_sequence=['#818cf8'])
         fig4.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=300, xaxis_title="월정료(원)")
         st.plotly_chart(fig4, use_container_width=True)
         
     with vc5:
-        # 5. 주요 영업구역 (Treemap)
         if '영업구역정보' in filtered.columns:
             top_sales = filtered['영업구역정보'].value_counts().nlargest(10).reset_index()
             top_sales.columns = ['영업구역', '고객수']
@@ -403,12 +442,10 @@ elif menu == "기존 대시보드":
     else:
         st.header("📊 기존 성과 대시보드")
         
-        # Simple Filter
         all_regions = sorted(df_old['구분'].unique()) if '구분' in df_old.columns else []
         sel_regions = st.multiselect("지사 선택", all_regions, default=all_regions)
         sub_df = df_old[df_old['구분'].isin(sel_regions)] if '구분' in df_old.columns else df_old
         
-        # KPIs
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("총 대상", f"{sub_df['대상'].sum():,.0f}")
         k2.metric("총 해지", f"{sub_df['해지'].sum():,.0f}")
@@ -417,7 +454,6 @@ elif menu == "기존 대시보드":
         
         st.markdown("---")
         
-        # Charts
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("지사별 방어율")
