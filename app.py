@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import folium
+from folium.plugins import MarkerCluster, MiniMap, Fullscreen
 from folium.features import DivIcon
 from streamlit_folium import st_folium
 from streamlit_option_menu import option_menu
@@ -114,9 +115,12 @@ def load_data():
             if '계약번호' in df.columns:
                 df['계약번호'] = df['계약번호'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-            # 해지 여부
+            # 해지 여부 (변경요청 기반)
             if '변경요청' not in df.columns: df['변경요청'] = ''
             df['해지여부'] = df['변경요청'].apply(lambda x: '해지예정' if str(x).strip() == '삭제' else '유지')
+
+            # 비고(제외) 확인용 컬럼
+            if '비고(관리고객 제외)' not in df.columns: df['비고(관리고객 제외)'] = None
 
             # 주소 병합
             if '군구' in df.columns and '읍면동' in df.columns:
@@ -167,17 +171,31 @@ with st.sidebar:
         # 1. 텍스트 검색
         search_txt = st.text_input("통합 검색 (고객명/계약번호)", placeholder="예: 블루엘리펀트")
         
-        # 2. 월정료 필터 (Pills)
+        # 2. [NEW] 비고(관리고객 제외) 필터 버튼
+        # 기본값 False = 전체 보기 (미적용)
+        # True = 필터 적용 (제외 문구가 있는 데이터 숨김)
+        exclude_note = st.toggle("🚫 비고(관리고객 제외) 적용", value=False)
+        
+        # 3. 월정료 필터 (Pills)
         st.caption("💰 월정료 구간")
         price_opts = ["전체", "10만 미만", "30만 미만", "50만 이상"]
         sel_price = st.pills("월정료", price_opts, default="전체", label_visibility="collapsed")
         
-        # 3. [수정] 해지 포함 여부 (기본값을 True로 변경하여 전체 데이터 표시)
+        # 4. 해지 포함 여부 (기본값 True: 전체 보기)
         show_churn = st.toggle("🚨 해지예정 포함 보기", value=True)
+        
+        # 5. 지도 테마 선택 (고급 옵션)
+        st.markdown("---")
+        st.caption("🎨 지도 스타일 (Map Theme)")
+        map_theme = st.selectbox(
+            "지도 배경 선택", 
+            ["라이트 (기본)", "다크 (야간모드)", "상세 (OpenStreet)"],
+            label_visibility="collapsed"
+        )
         
         st.markdown("---")
         
-        # 4. 상세 구역 필터 (Expander)
+        # 6. 상세 구역 필터 (Expander)
         with st.expander("📂 지사 및 구역 선택", expanded=True):
             # 지사 (Pills)
             sel_branch = []
@@ -186,18 +204,16 @@ with st.sidebar:
                 all_branches = sorted(df_new['담당부서2'].unique().dropna(), key=lambda x: x if x in ['중앙', '강북', '서대문', '고양', '의정부', '남양주', '강릉', '원주'] else 'ㅎ')
                 sel_branch = st.pills("지사", all_branches, selection_mode="multi", label_visibility="collapsed")
             
-            # 영업구역 (동적 Pills 적용)
+            # 영업구역 (동적 Pills)
             sel_sales = []
             if '영업구역정보' in df_new.columns:
                 st.caption("영업구역")
-                # 지사가 선택되었다면 해당 지사의 영업구역만 표시
                 if sel_branch:
                     filtered_for_opts = df_new[df_new['담당부서2'].isin(sel_branch)]
                     all_sales = sorted(filtered_for_opts['영업구역정보'].astype(str).unique())
                 else:
                     all_sales = sorted(df_new['영업구역정보'].astype(str).unique())
                 
-                # [수정] 옵션 개수가 적으면 버튼(Pills), 많으면 멀티셀렉트로 자동 전환
                 if len(all_sales) <= 20:
                     sel_sales = st.pills("영업구역", all_sales, selection_mode="multi", label_visibility="collapsed")
                 else:
@@ -213,25 +229,34 @@ if menu == "2026 관리고객 DB":
         st.error("데이터 파일(db.csv)이 없습니다.")
         st.stop()
 
-    # --- Data Filtering ---
+    # --- Data Filtering Logic ---
     filtered = df_new.copy()
     
-    # 1. 해지 필터 (기본 포함)
+    # 1. [NEW] 비고(관리고객 제외) 필터링
+    # exclude_note가 True(적용)이면, 비고란이 비어있는(NaN or '') 데이터만 남김
+    if exclude_note:
+        filtered = filtered[
+            filtered['비고(관리고객 제외)'].isna() | 
+            (filtered['비고(관리고객 제외)'].astype(str).str.strip() == '') |
+            (filtered['비고(관리고객 제외)'].astype(str).str.strip() == 'nan')
+        ]
+        
+    # 2. 해지 필터
     if not show_churn: filtered = filtered[filtered['해지여부'] == '유지']
     
-    # 2. 검색
+    # 3. 검색
     if search_txt:
         filtered = filtered[
             filtered['관리고객명'].astype(str).str.contains(search_txt, case=False) |
             filtered['계약번호'].astype(str).str.contains(search_txt, case=False)
         ]
-    # 3. 금액
+    # 4. 금액
     if sel_price != "전체":
         limit = 100000 if "10만" in sel_price else (300000 if "30만" in sel_price else 500000)
         if "이상" in sel_price: filtered = filtered[filtered['월정료_숫자'] >= limit]
         else: filtered = filtered[filtered['월정료_숫자'] < limit]
         
-    # 4. 구역
+    # 5. 구역
     if sel_branch: filtered = filtered[filtered['담당부서2'].isin(sel_branch)]
     if sel_sales: filtered = filtered[filtered['영업구역정보'].isin(sel_sales)]
 
@@ -243,7 +268,7 @@ if menu == "2026 관리고객 DB":
         st.markdown(f"""
             <div style='text-align:right; padding:10px;'>
                 <span style='background:#e0e7ff; color:#4338ca; padding:5px 12px; border-radius:20px; font-size:12px; font-weight:700;'>
-                    Live Status: Connected
+                    Total: {len(filtered):,} Rows
                 </span>
             </div>
         """, unsafe_allow_html=True)
@@ -252,7 +277,8 @@ if menu == "2026 관리고객 DB":
     k1, k2, k3, k4 = st.columns(4)
     unique_contracts = filtered['계약번호'].nunique()
     total_amount = filtered['월정료_숫자'].sum()
-    churn_count = len(filtered[filtered['해지여부'] == '해지예정'])
+    # 제외 대상 카운트 (전체 - 현재 필터된 수, 단순 계산용)
+    excluded_count = len(df_new) - len(filtered)
     
     def kpi_card(label, value, color="black"):
         return f"""
@@ -264,73 +290,73 @@ if menu == "2026 관리고객 DB":
     with k1: st.markdown(kpi_card("총 데이터 (Rows)", f"{len(filtered):,}건"), unsafe_allow_html=True)
     with k2: st.markdown(kpi_card("총 계약 (Unique)", f"{unique_contracts:,}건", "#4f46e5"), unsafe_allow_html=True)
     with k3: st.markdown(kpi_card("총 월정료", f"{total_amount/10000:,.0f}만원", "#059669"), unsafe_allow_html=True)
-    with k4: st.markdown(kpi_card("해지 예정", f"{churn_count:,}건", "#dc2626"), unsafe_allow_html=True)
+    # 필터에 따라 제외된 수 표시 (참고용)
+    with k4: st.markdown(kpi_card("필터 제외 건수", f"{excluded_count:,}건", "#6b7280"), unsafe_allow_html=True)
 
     st.markdown("###")
 
-    # --- [TOP] Map Visualization (Selection-Aware) ---
+    # --- [TOP] Map Visualization (Selection-Aware & Themed) ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     
-    # 지도 모드: 체크박스로 선택된 데이터가 있으면 그것만, 없으면 필터된 전체
-    # st.session_state에 선택된 행 정보가 있는지 확인 (아래 리스트 코드에서 저장)
+    # 지도 모드 확인
     if 'selected_rows_indices' not in st.session_state:
         st.session_state.selected_rows_indices = []
 
-    # 지도에 표시할 데이터 결정
     if st.session_state.selected_rows_indices:
-        # 선택된 행이 있다면 해당 행만 지도에 표시
-        # 인덱스는 filtered 기준이므로 iloc 사용
         try:
             map_target_df = filtered.iloc[st.session_state.selected_rows_indices]
-            # 줌 레벨과 중심점도 선택된 데이터로 이동
             if not map_target_df.empty:
                 center_lat = map_target_df['위도'].mean()
                 center_lng = map_target_df['경도'].mean()
-                zoom_level = 15 # 상세 줌
-                
-                # 세션 상태 업데이트 (리런 시 반영)
+                zoom_level = 15
                 if st.session_state.map_center != [center_lat, center_lng]:
                     st.session_state.map_center = [center_lat, center_lng]
                     st.session_state.map_zoom = zoom_level
                     st.rerun()
-        except:
-            map_target_df = filtered # 오류 시 전체
+        except: map_target_df = filtered
     else:
-        # 선택된 게 없으면 필터된 전체 데이터 표시
         map_target_df = filtered
         
     map_valid_df = map_target_df[(map_target_df['위도'] > 0) & (map_target_df['경도'] > 0)]
     
-    st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳 표시)</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳)</div>', unsafe_allow_html=True)
 
     if not map_valid_df.empty:
-        # 지도 생성
+        # [고급화] 지도 테마 적용
+        if "다크" in map_theme:
+            tile_layer = "cartodbdark_matter"
+        elif "상세" in map_theme:
+            tile_layer = "openstreetmap"
+        else:
+            tile_layer = "cartodbpositron" # 기본 라이트
+
         m = folium.Map(
             location=st.session_state.map_center, 
             zoom_start=st.session_state.map_zoom, 
-            tiles='cartodbpositron'
+            tiles=tile_layer
         )
         
-        from folium.plugins import MarkerCluster
-        # 데이터가 적으면(선택 시) 클러스터 없이 바로 표시, 많으면 클러스터
-        if len(map_valid_df) <= 5:
-            mc = m # 클러스터 안씀
-        else:
-            mc = MarkerCluster().add_to(m)
+        # [고급화] 미니맵 및 풀스크린 컨트롤 추가
+        MiniMap(toggle_display=True).add_to(m)
+        Fullscreen().add_to(m)
+        
+        if len(map_valid_df) <= 5: mc = m
+        else: mc = MarkerCluster().add_to(m)
 
         for _, row in map_valid_df.iterrows():
             is_churn = row['해지여부'] == '해지예정'
             color = 'red' if is_churn else 'blue'
             
-            # [기능] 지도 텍스트 라벨 (DivIcon) - 상호명 표시
-            # 선택된 상태거나 데이터가 적을 때만 텍스트 표시하여 겹침 방지
+            # 텍스트 라벨 (선택됨 or 소수 데이터일 때)
             if len(map_valid_df) <= 10:
+                txt_color = "white" if "다크" in map_theme else "black"
+                shadow = "none" if "다크" in map_theme else "1px 1px 0 #fff"
                 folium.map.Marker(
                     [row['위도'], row['경도']],
                     icon=DivIcon(
                         icon_size=(150,36),
                         icon_anchor=(75, -10),
-                        html=f'<div style="font-size: 11px; font-weight: bold; color: {color}; text-align: center; text-shadow: 1px 1px 0 #fff;">{row["상호"]}</div>',
+                        html=f'<div style="font-size: 11px; font-weight: bold; color: {color}; text-align: center; text-shadow: {shadow};">{row["상호"]}</div>',
                     )
                 ).add_to(m)
 
@@ -354,7 +380,7 @@ if menu == "2026 관리고객 DB":
                 icon=folium.Icon(color=color, icon='info-sign')
             ).add_to(mc)
 
-        st_folium(m, width="100%", height=450, returned_objects=[])
+        st_folium(m, width="100%", height=500, returned_objects=[])
     else:
         st.warning("표시할 위치 데이터가 없습니다.")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -366,14 +392,13 @@ if menu == "2026 관리고객 DB":
     cols_show = ['관리고객명', '상호', '계약번호', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '해지여부', '지도링크_URL']
     final_cols = [c for c in cols_show if c in filtered.columns]
     
-    # [핵심] 멀티 선택 모드 적용
     selection = st.dataframe(
         filtered[final_cols],
         use_container_width=True,
         height=400,
         hide_index=True,
         on_select="rerun",
-        selection_mode="multi-row", # 다중 선택 가능
+        selection_mode="multi-row",
         column_config={
             "해지여부": st.column_config.TextColumn("상태"),
             "합산월정료(KTT+KT)": st.column_config.TextColumn("월정료"),
@@ -381,10 +406,9 @@ if menu == "2026 관리고객 DB":
         }
     )
     
-    # 선택 상태 저장 (지도 업데이트용)
     if selection.selection.rows != st.session_state.selected_rows_indices:
         st.session_state.selected_rows_indices = selection.selection.rows
-        st.rerun() # 변경 시 즉시 지도 갱신
+        st.rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -392,7 +416,6 @@ if menu == "2026 관리고객 DB":
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     st.markdown('<div class="section-header">📊 통합 분석 대시보드 (5-Way Analysis)</div>', unsafe_allow_html=True)
 
-    # Row 1: 3 Charts
     vc1, vc2, vc3 = st.columns(3)
     
     with vc1:
@@ -414,7 +437,6 @@ if menu == "2026 관리고객 DB":
         fig3.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig3, use_container_width=True)
 
-    # Row 2: 2 Charts
     vc4, vc5 = st.columns(2)
     
     with vc4:
