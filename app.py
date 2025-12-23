@@ -88,7 +88,7 @@ def load_data():
     files = {'old': 'papp.csv', 'new': 'db.csv'}
     data = {'old': None, 'new': None}
     
-    # 1. 기존 데이터 로드
+    # 1. 기존 데이터 로드 (papp.csv)
     for fname in ['papp.csv', 'papp.xlsx']:
         if os.path.exists(fname):
             try:
@@ -103,12 +103,12 @@ def load_data():
                 break
             except: continue
 
-    # 2. 2026 DB 로드
+    # 2. 2026 DB 로드 (db.csv)
     if os.path.exists(files['new']):
         try:
             df = pd.read_csv(files['new'])
             
-            # 숫자형 변환
+            # 숫자형 변환 (안전하게 처리)
             for c in ['위도', '경도']:
                 if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
             
@@ -118,7 +118,7 @@ def load_data():
             if '계약번호' in df.columns:
                 df['계약번호'] = df['계약번호'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-            # 해지 여부
+            # 해지 여부 (변경요청 컬럼 기반)
             if '변경요청' not in df.columns: df['변경요청'] = ''
             df['해지여부'] = df['변경요청'].apply(lambda x: '해지예정' if str(x).strip() == '삭제' else '유지')
 
@@ -131,6 +131,7 @@ def load_data():
             else:
                 df['주소(지역)'] = df['설치주소']
 
+            # 지도 링크
             if '지도링크_URL' not in df.columns:
                 df['지도링크_URL'] = ''
 
@@ -275,6 +276,7 @@ if menu == "2026 관리고객 DB":
             </div>
         """, unsafe_allow_html=True)
 
+    # --- [KPI Section] ---
     k1, k2, k3, k4 = st.columns(4)
     unique_contracts = filtered['계약번호'].nunique()
     total_amount = filtered['월정료_숫자'].sum()
@@ -297,26 +299,27 @@ if menu == "2026 관리고객 DB":
     # --- [TOP] Map Visualization ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     
-    # 지도에 표시할 데이터 결정 (선택된 행 우선)
+    # 지도 모드 확인 (선택된 행)
+    map_target_df = filtered
     if 'selected_rows_indices' not in st.session_state:
         st.session_state.selected_rows_indices = []
 
     if st.session_state.selected_rows_indices:
         try:
-            map_target_df = filtered.iloc[st.session_state.selected_rows_indices]
-            if not map_target_df.empty:
-                # 선택된 데이터의 중심으로 이동
+            # 선택된 인덱스로 데이터 필터링
+            selected_df = filtered.iloc[st.session_state.selected_rows_indices]
+            if not selected_df.empty:
+                map_target_df = selected_df
+                # 중심점 이동
                 center_lat = map_target_df['위도'].mean()
                 center_lng = map_target_df['경도'].mean()
-                # 좌표가 변경된 경우에만 리런
                 if st.session_state.map_center != [center_lat, center_lng]:
                     st.session_state.map_center = [center_lat, center_lng]
                     st.session_state.map_zoom = 15
                     st.rerun()
-        except: map_target_df = filtered
-    else:
-        map_target_df = filtered
-        
+        except:
+            st.session_state.selected_rows_indices = []
+
     map_valid_df = map_target_df[(map_target_df['위도'] > 0) & (map_target_df['경도'] > 0)]
     
     st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳)</div>', unsafe_allow_html=True)
@@ -343,7 +346,7 @@ if menu == "2026 관리고객 DB":
             is_churn = row['해지여부'] == '해지예정'
             color = 'red' if is_churn else 'blue'
             
-            # 소수 데이터일 때만 텍스트 라벨 표시 (가독성)
+            # 텍스트 라벨 (데이터 적을 때만 표시)
             if len(map_valid_df) <= 10:
                 txt_color = "white" if "다크" in map_theme else "black"
                 shadow = "none" if "다크" in map_theme else "1px 1px 0 #fff"
@@ -388,7 +391,6 @@ if menu == "2026 관리고객 DB":
     cols_show = ['관리고객명', '상호', '계약번호', '담당부서2', '주소(지역)', '합산월정료(KTT+KT)', '영업구역정보', '해지여부', '지도링크_URL']
     final_cols = [c for c in cols_show if c in filtered.columns]
     
-    # 리스트 생성 (멀티 선택 가능)
     selection = st.dataframe(
         filtered[final_cols],
         use_container_width=True,
@@ -403,7 +405,7 @@ if menu == "2026 관리고객 DB":
         }
     )
     
-    # 선택 상태가 바뀌면 리런하여 지도 업데이트
+    # 선택 상태 저장
     if selection.selection.rows != st.session_state.selected_rows_indices:
         st.session_state.selected_rows_indices = selection.selection.rows
         st.rerun()
@@ -420,7 +422,7 @@ if menu == "2026 관리고객 DB":
         if '담당부서2' in filtered.columns:
             counts = filtered['담당부서2'].value_counts().reset_index()
             counts.columns = ['지사', '고객수']
-            # [수정] color_continuous_scale='Purples' 적용 (Plotly 공식 색상표 사용)
+            # [수정: 오류 해결] color_continuous_scale='Purples' 적용 (Plotly 공식 색상표 사용)
             fig1 = px.bar(counts, x='지사', y='고객수', color='고객수', color_continuous_scale='Purples', title="지사별 고객 분포")
             fig1.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=300)
             st.plotly_chart(fig1, use_container_width=True)
@@ -447,7 +449,7 @@ if menu == "2026 관리고객 DB":
         if '영업구역정보' in filtered.columns:
             top_sales = filtered['영업구역정보'].value_counts().nlargest(10).reset_index()
             top_sales.columns = ['영업구역', '고객수']
-            # [수정] color_continuous_scale='Teal' 적용 (Mint 대체)
+            # [수정: 오류 해결] color_continuous_scale='Teal' 적용 (Mint 대체)
             fig5 = px.treemap(top_sales, path=['영업구역'], values='고객수', title="핵심 영업구역 Top 10", color='고객수', color_continuous_scale='Teal')
             fig5.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig5, use_container_width=True)
@@ -480,6 +482,7 @@ elif menu == "기존 대시보드":
         with c1:
             st.subheader("지사별 방어율")
             if '구분' in sub_df.columns:
+                # [수정] 기존 대시보드 차트 색상도 안전하게 변경
                 fig = px.bar(sub_df.groupby('구분')['유지(방어)율'].mean().reset_index(), x='구분', y='유지(방어)율', color='구분')
                 st.plotly_chart(fig, use_container_width=True)
         with c2:
