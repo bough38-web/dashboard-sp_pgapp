@@ -15,11 +15,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# [Session State] 지도 중심점/줌 관리
+# [Session State] 지도 및 선택 상태 관리
 if 'map_center' not in st.session_state:
-    st.session_state.map_center = [37.5665, 126.9780]
+    st.session_state.map_center = [37.5665, 126.9780] # 서울 시청
 if 'map_zoom' not in st.session_state:
     st.session_state.map_zoom = 11
+if 'selected_rows_indices' not in st.session_state:
+    st.session_state.selected_rows_indices = []
 
 # [CSS] Expert UI/UX Styling
 st.markdown("""
@@ -294,25 +296,24 @@ if menu == "2026 관리고객 DB":
     # --- [TOP] Map Visualization ---
     st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
     
-    # 지도 모드 확인 (선택된 행)
-    if 'selected_rows_indices' not in st.session_state:
-        st.session_state.selected_rows_indices = []
-
+    # 지도 데이터 준비 (선택된 데이터 확인)
+    map_target_df = filtered
+    
     if st.session_state.selected_rows_indices:
         try:
-            map_target_df = filtered.iloc[st.session_state.selected_rows_indices]
-            if not map_target_df.empty:
+            selected_df = filtered.iloc[st.session_state.selected_rows_indices]
+            if not selected_df.empty:
+                map_target_df = selected_df
+                # 선택된 데이터의 중심으로 이동 (세션 상태 업데이트)
                 center_lat = map_target_df['위도'].mean()
                 center_lng = map_target_df['경도'].mean()
-                zoom_level = 15
                 if st.session_state.map_center != [center_lat, center_lng]:
                     st.session_state.map_center = [center_lat, center_lng]
-                    st.session_state.map_zoom = zoom_level
+                    st.session_state.map_zoom = 15
                     st.rerun()
-        except: map_target_df = filtered
-    else:
-        map_target_df = filtered
-        
+        except:
+            st.session_state.selected_rows_indices = [] # 인덱스 오류 시 초기화
+
     map_valid_df = map_target_df[(map_target_df['위도'] > 0) & (map_target_df['경도'] > 0)]
     
     st.markdown(f'<div class="section-header">📍 고객 위치 모니터링 ({len(map_valid_df)}곳)</div>', unsafe_allow_html=True)
@@ -339,6 +340,7 @@ if menu == "2026 관리고객 DB":
             is_churn = row['해지여부'] == '해지예정'
             color = 'red' if is_churn else 'blue'
             
+            # 텍스트 라벨 (데이터 적을 때만 표시)
             if len(map_valid_df) <= 10:
                 txt_color = "white" if "다크" in map_theme else "black"
                 shadow = "none" if "다크" in map_theme else "1px 1px 0 #fff"
@@ -397,6 +399,7 @@ if menu == "2026 관리고객 DB":
         }
     )
     
+    # 선택 상태 저장
     if selection.selection.rows != st.session_state.selected_rows_indices:
         st.session_state.selected_rows_indices = selection.selection.rows
         st.rerun()
@@ -413,7 +416,7 @@ if menu == "2026 관리고객 DB":
         if '담당부서2' in filtered.columns:
             counts = filtered['담당부서2'].value_counts().reset_index()
             counts.columns = ['지사', '고객수']
-            # [수정] color_continuous_scale 오류 해결 -> 'Purples' 적용
+            # [수정] color_continuous_scale='Purples' 적용 (오류 해결)
             fig1 = px.bar(counts, x='지사', y='고객수', color='고객수', color_continuous_scale='Purples', title="지사별 고객 분포")
             fig1.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=300)
             st.plotly_chart(fig1, use_container_width=True)
@@ -440,7 +443,7 @@ if menu == "2026 관리고객 DB":
         if '영업구역정보' in filtered.columns:
             top_sales = filtered['영업구역정보'].value_counts().nlargest(10).reset_index()
             top_sales.columns = ['영업구역', '고객수']
-            # [수정] Mint -> Teal (안전한 색상표 사용)
+            # [수정] Mint -> Teal 적용
             fig5 = px.treemap(top_sales, path=['영업구역'], values='고객수', title="핵심 영업구역 Top 10", color='고객수', color_continuous_scale='Teal')
             fig5.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
             st.plotly_chart(fig5, use_container_width=True)
